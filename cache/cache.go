@@ -2,6 +2,7 @@ package cache
 
 import (
     "container/list"
+    "errors"
     "sync"
     "sync/atomic"
 )
@@ -23,6 +24,12 @@ type Cache struct {
     stats     atomic.Value // Use atomic.Value for stats to reduce lock contention
 }
 
+// Add these constants
+const (
+    maxKeyLength   = 256
+    maxValueLength = 256
+)
+
 // NewCache creates a new Cache with the specified maximum number of items
 func NewCache(maxItems int) *Cache {
     c := &Cache{
@@ -36,31 +43,44 @@ func NewCache(maxItems int) *Cache {
 }
 
 // Put adds or updates a key-value pair in the cache
-func (c *Cache) Put(key, value string) {
+func (c *Cache) Put(key, value string) error {
+    if len(key) == 0 || len(key) > maxKeyLength {
+        return errors.New("key length must be between 1 and 256 characters")
+    }
+    if len(value) > maxValueLength {
+        return errors.New("value length must not exceed 256 characters")
+    }
+
     c.mutex.Lock()
     defer c.mutex.Unlock()
 
-    // If key already exists, update its value and move to front of LRU list
+    // If key already exists, update its value
     if _, exists := c.items[key]; exists {
         c.items[key] = value
-        c.lruList.MoveToFront(c.lruMap[key])
-        return
+        if elem, ok := c.lruMap[key]; ok {
+            c.lruList.MoveToFront(elem)
+        }
+        return nil
+    }
+
+    // Check capacity before adding
+    if c.lruList.Len() >= c.maxItems {
+        c.evictLRU()
     }
 
     // Add new key-value pair
     c.items[key] = value
     elem := c.lruList.PushFront(key)
     c.lruMap[key] = elem
-
-    // If cache is full, evict the least recently used item
-    if c.lruList.Len() > c.maxItems {
-        c.evictLRU()
-    }
+    return nil
 }
 
 // Get retrieves a value from the cache by key
 func (c *Cache) Get(key string) (string, bool) {
-    // First try read-only access
+    if len(key) > maxKeyLength {
+        return "", false
+    }
+
     c.mutex.RLock()
     value, exists := c.items[key]
     if !exists {
@@ -69,14 +89,12 @@ func (c *Cache) Get(key string) (string, bool) {
         atomic.AddUint64(&stats.Misses, 1)
         return "", false
     }
-    c.mutex.RUnlock()
 
-    // Only take write lock for LRU update
-    c.mutex.Lock()
+    // Update LRU under the same lock to prevent race conditions
     if elem, ok := c.lruMap[key]; ok {
         c.lruList.MoveToFront(elem)
     }
-    c.mutex.Unlock()
+    c.mutex.RUnlock()
 
     stats := c.stats.Load().(*Stats)
     atomic.AddUint64(&stats.Hits, 1)

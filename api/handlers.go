@@ -1,11 +1,31 @@
 package api
 
 import (
+    "compress/gzip"
     "encoding/json"
     "net/http"
+    "strings"
 
     "github.com/OmMishra16/key-value-cache/cache"
 )
+
+// gzipResponseWriter properly implements http.ResponseWriter
+type gzipResponseWriter struct {
+    http.ResponseWriter
+    writer *gzip.Writer
+}
+
+func (w gzipResponseWriter) Write(b []byte) (int, error) {
+    return w.writer.Write(b)
+}
+
+func (w gzipResponseWriter) Header() http.Header {
+    return w.ResponseWriter.Header()
+}
+
+func (w gzipResponseWriter) WriteHeader(statusCode int) {
+    w.ResponseWriter.WriteHeader(statusCode)
+}
 
 // Handler holds handlers for the API
 type Handler struct {
@@ -140,9 +160,22 @@ func (h *Handler) Router() http.Handler {
 
 func (h *Handler) addMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // Add common headers
+        // Set common headers first
         w.Header().Set("Content-Type", "application/json")
         w.Header().Set("Connection", "keep-alive")
+
+        // Handle compression if supported
+        if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+            gz := gzip.NewWriter(w)
+            defer gz.Close()
+            w.Header().Set("Content-Encoding", "gzip")
+            gzw := &gzipResponseWriter{
+                ResponseWriter: w,
+                writer:        gz,
+            }
+            next.ServeHTTP(gzw, r)
+            return
+        }
         
         next.ServeHTTP(w, r)
     })

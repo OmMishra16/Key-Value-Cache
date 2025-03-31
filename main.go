@@ -6,6 +6,7 @@ import (
     "net/http"
     "runtime"
     "time"
+    "runtime/debug"
 
     "github.com/OmMishra16/key-value-cache/api"
     "github.com/OmMishra16/key-value-cache/cache"
@@ -27,33 +28,36 @@ func (ln tcpKeepAliveListener) Accept() (net.Conn, error) {
 }
 
 func main() {
-    // Use all available CPU cores
-    runtime.GOMAXPROCS(runtime.NumCPU())
+    // Use all available CPU cores (t3.small has 2 cores)
+    runtime.GOMAXPROCS(2)
 
-    // Create a cache sized for optimal memory usage on t3.small (2GB RAM)
-    // Assuming average key+value size of 512 bytes, reserve 1.5GB for cache
-    maxItems := 3_000_000 // Approximately 1.5GB of data
-
+    // Optimize GC for low latency
+    debug.SetGCPercent(50)  // More aggressive GC
+    
+    // Optimize cache size for t3.small
+    maxItems := 2_000_000  // Reduced to ensure we stay well under memory limits
+    
     c := cache.NewCache(maxItems)
     handler := api.NewHandler(c)
 
     // Optimize server settings
     server := &http.Server{
-        Addr:         ":7171",
-        Handler:      handler.Router(), // Use custom router for better performance
-        ReadTimeout:  2 * time.Second,  // Reduced timeouts
-        WriteTimeout: 2 * time.Second,
-        IdleTimeout:  60 * time.Second,
+        Addr:           ":7171",
+        Handler:        handler.Router(),
+        ReadTimeout:    2 * time.Second,    // Increased timeout
+        WriteTimeout:   2 * time.Second,
+        IdleTimeout:    120 * time.Second,
+        MaxHeaderBytes: 1 << 16,
     }
 
-    // Enable TCP keep-alives
+    // Enable TCP keep-alives with shorter period
     ln, err := net.Listen("tcp", ":7171")
     if err != nil {
         log.Fatal(err)
     }
     tcpListener := ln.(*net.TCPListener)
     
-    log.Println("Starting optimized key-value cache server on port 7171...")
+    log.Printf("Starting cache server with %d max items\n", maxItems)
     if err := server.Serve(tcpKeepAliveListener{tcpListener}); err != nil {
         log.Fatal(err)
     }
