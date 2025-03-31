@@ -55,34 +55,23 @@ type Response struct {
 
 // PutHandler handles the PUT operation
 func (h *Handler) PutHandler(w http.ResponseWriter, r *http.Request) {
-    // Check if method is POST
     if r.Method != http.MethodPost {
         respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
         return
     }
 
-    // Parse request body
     var req PutRequest
-    decoder := json.NewDecoder(r.Body)
-    if err := decoder.Decode(&req); err != nil {
-        respondWithError(w, http.StatusBadRequest, "Invalid request body")
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondWithError(w, http.StatusBadRequest, "Invalid request format")
         return
     }
 
-    // Validate key and value length
-    if len(req.Key) == 0 || len(req.Key) > 256 {
-        respondWithError(w, http.StatusBadRequest, "Key length must be between 1 and 256 characters")
-        return
-    }
-    if len(req.Value) > 256 {
-        respondWithError(w, http.StatusBadRequest, "Value length must not exceed 256 characters")
+    if err := h.cache.Put(req.Key, req.Value); err != nil {
+        respondWithError(w, http.StatusBadRequest, err.Error())
         return
     }
 
-    // Put key-value pair in cache
-    h.cache.Put(req.Key, req.Value)
-
-    // Respond with success
+    // Update response to match specification
     response := Response{
         Status:  "OK",
         Message: "Key inserted/updated successfully.",
@@ -92,28 +81,25 @@ func (h *Handler) PutHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetHandler handles the GET operation
 func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
-    // Check if method is GET
     if r.Method != http.MethodGet {
         respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed")
         return
     }
 
-    // Get key from query parameters
     key := r.URL.Query().Get("key")
     if key == "" {
         respondWithError(w, http.StatusBadRequest, "Key parameter is required")
         return
     }
 
-    // Validate key length
     if len(key) > 256 {
         respondWithError(w, http.StatusBadRequest, "Key length must not exceed 256 characters")
         return
     }
 
-    // Get value from cache
     value, found := h.cache.Get(key)
     if !found {
+        // Update not found response to match specification
         response := Response{
             Status:  "ERROR",
             Message: "Key not found.",
@@ -122,7 +108,7 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Respond with value
+    // Update success response to match specification
     response := Response{
         Status: "OK",
         Key:    key,
